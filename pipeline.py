@@ -43,9 +43,15 @@ def classify_column(series: pd.Series) -> str:
     if numeric_converted.notna().all():
         return "numerical"
 
-    # Categorical: small number of unique values (<=8)
-    unique_count = non_null.nunique()
-    if unique_count <= 8:
+    # Text signals — check before categorical to handle low-response surveys
+    avg_len = non_null.str.len().mean()
+    unique_ratio = non_null.nunique() / len(non_null)
+
+    if avg_len > 30 or unique_ratio > 0.6:
+        return "text"
+
+    # Categorical: small fixed set of short repeated values
+    if non_null.nunique() <= 8:
         return "categorical"
 
     return "text"
