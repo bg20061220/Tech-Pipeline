@@ -1,13 +1,70 @@
 import os
+import json
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from pathlib import Path
 from dotenv import load_dotenv
 from streamlit_extras.metric_cards import style_metric_cards
 from pipeline import run_pipeline
 from analysis import run_analysis
 
 load_dotenv()
+
+CACHE_DIR = Path(".cache")
+
+# --- Cache helpers ---
+
+def save_session(column_map, timestamp, df_numerical, df_categorical, df_text, file_bytes):
+    CACHE_DIR.mkdir(exist_ok=True)
+    with open(CACHE_DIR / "column_map.json", "w") as f:
+        json.dump(column_map, f)
+    timestamp.to_frame(name="timestamp").to_parquet(CACHE_DIR / "timestamp.parquet")
+    df_numerical.to_parquet(CACHE_DIR / "df_numerical.parquet")
+    df_categorical.to_parquet(CACHE_DIR / "df_categorical.parquet")
+    df_text.to_parquet(CACHE_DIR / "df_text.parquet")
+    (CACHE_DIR / "uploaded_file.bin").write_bytes(file_bytes)
+    (CACHE_DIR / "session.json").write_text(json.dumps({"valid": True}))
+
+
+def load_session():
+    if not (CACHE_DIR / "session.json").exists():
+        return None
+    with open(CACHE_DIR / "column_map.json") as f:
+        column_map = json.load(f)
+    timestamp = pd.read_parquet(CACHE_DIR / "timestamp.parquet")["timestamp"]
+    df_numerical = pd.read_parquet(CACHE_DIR / "df_numerical.parquet")
+    df_categorical = pd.read_parquet(CACHE_DIR / "df_categorical.parquet")
+    df_text = pd.read_parquet(CACHE_DIR / "df_text.parquet")
+    file_bytes = (CACHE_DIR / "uploaded_file.bin").read_bytes()
+    return column_map, timestamp, df_numerical, df_categorical, df_text, file_bytes
+
+
+def save_analysis(analysis_results):
+    CACHE_DIR.mkdir(exist_ok=True)
+    with open(CACHE_DIR / "analysis_results.json", "w") as f:
+        json.dump(analysis_results, f)
+
+
+def load_analysis():
+    path = CACHE_DIR / "analysis_results.json"
+    if not path.exists():
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def clear_session():
+    if CACHE_DIR.exists():
+        for f in CACHE_DIR.iterdir():
+            f.unlink()
+        CACHE_DIR.rmdir()
+    for key in ["column_map", "timestamp", "df_numerical", "df_categorical", "df_text",
+                "file_bytes", "analysis_results"]:
+        st.session_state.pop(key, None)
+
+
+# --- Page config ---
 
 st.set_page_config(page_title="Survey Analysis Pipeline", layout="wide", page_icon="📊")
 
@@ -28,17 +85,59 @@ st.markdown("""
 st.title("📊 Survey Analysis Pipeline")
 st.caption("Google Forms / Google Sheets export → typed dataframes ready for analysis.")
 
+# --- Load from cache into session_state on first run ---
+if "column_map" not in st.session_state:
+    cached = load_session()
+    if cached:
+        (st.session_state["column_map"],
+         st.session_state["timestamp"],
+         st.session_state["df_numerical"],
+         st.session_state["df_categorical"],
+         st.session_state["df_text"],
+         st.session_state["file_bytes"]) = cached
+        st.toast("Session restored from cache.", icon="✅")
+
+if "analysis_results" not in st.session_state:
+    cached_analysis = load_analysis()
+    if cached_analysis:
+        st.session_state["analysis_results"] = cached_analysis
+
+# --- File uploader ---
 uploaded_file = st.file_uploader("Drop your CSV file here", type=["csv"])
 
 if uploaded_file is not None:
     with st.spinner("Running pipeline..."):
+        file_bytes = uploaded_file.read()
+        uploaded_file.seek(0)
         result = run_pipeline(uploaded_file)
 
-    column_map = result["column_map"]
-    timestamp = result["timestamp"]
-    df_numerical = result["df_numerical"]
-    df_categorical = result["df_categorical"]
-    df_text = result["df_text"]
+    st.session_state["column_map"] = result["column_map"]
+    st.session_state["timestamp"] = result["timestamp"]
+    st.session_state["df_numerical"] = result["df_numerical"]
+    st.session_state["df_categorical"] = result["df_categorical"]
+    st.session_state["df_text"] = result["df_text"]
+    st.session_state["file_bytes"] = file_bytes
+    st.session_state.pop("analysis_results", None)
+
+    save_session(
+        result["column_map"], result["timestamp"],
+        result["df_numerical"], result["df_categorical"], result["df_text"],
+        file_bytes,
+    )
+
+# --- Render if session data exists ---
+if "column_map" in st.session_state:
+    column_map = st.session_state["column_map"]
+    timestamp = st.session_state["timestamp"]
+    df_numerical = st.session_state["df_numerical"]
+    df_categorical = st.session_state["df_categorical"]
+    df_text = st.session_state["df_text"]
+    file_bytes = st.session_state["file_bytes"]
+
+    # Clear session button
+    if st.button("🗑 Clear Session"):
+        clear_session()
+        st.rerun()
 
     # --- Summary metrics ---
     st.divider()
@@ -80,11 +179,18 @@ if uploaded_file is not None:
             column_map[row["col_id"]]["type"] = row["type"]
 
         from pipeline import handle_nulls, split_dataframes, load_csv, rename_columns
-        uploaded_file.seek(0)
-        raw_df = load_csv(uploaded_file)
+        import io
+        raw_df = load_csv(io.BytesIO(file_bytes))
         df_internal = rename_columns(raw_df)
         df_internal = handle_nulls(df_internal, column_map)
         df_numerical, df_categorical, df_text = split_dataframes(df_internal, column_map)
+
+        st.session_state["column_map"] = column_map
+        st.session_state["df_numerical"] = df_numerical
+        st.session_state["df_categorical"] = df_categorical
+        st.session_state["df_text"] = df_text
+
+        save_session(column_map, timestamp, df_numerical, df_categorical, df_text, file_bytes)
 
     st.divider()
 
@@ -97,39 +203,43 @@ if uploaded_file is not None:
             label = column_map.get(col_id, {}).get("original", col_id)
             series = df_numerical[col_id].dropna().astype(float)
 
-            st.subheader(label)
+            left, right = st.columns([1, 2])
 
-            # Stats
-            mean_val = series.mean()
-            median_val = series.median()
-            mode_vals = series.mode()
-            mode_val = mode_vals.iloc[0] if not mode_vals.empty else float("nan")
-            q1 = series.quantile(0.25)
-            q3 = series.quantile(0.75)
+            with left:
+                st.subheader(label)
 
-            s1, s2, s3, s4, s5 = st.columns(5)
-            s1.metric("Mean", f"{mean_val:.2f}")
-            s2.metric("Median", f"{median_val:.2f}")
-            s3.metric("Mode", f"{mode_val:.2f}")
-            s4.metric("Q1 (25%)", f"{q1:.2f}")
-            s5.metric("Q3 (75%)", f"{q3:.2f}")
+                mean_val = series.mean()
+                median_val = series.median()
+                mode_vals = series.mode()
+                mode_val = mode_vals.iloc[0] if not mode_vals.empty else float("nan")
+                q1 = series.quantile(0.25)
+                q3 = series.quantile(0.75)
 
-            # Histogram
-            fig = px.histogram(
-                series,
-                x=col_id,
-                nbins=20,
-                labels={col_id: label},
-                color_discrete_sequence=["#1A5FAD"],
-            )
-            fig.update_layout(
-                margin=dict(t=20, b=20),
-                xaxis_title=label,
-                yaxis_title="Count",
-                bargap=0.05,
-                dragmode=False,
-            )
-            st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
+                s1, s2 = st.columns(2)
+                s1.metric("Mean", f"{mean_val:.2f}")
+                s2.metric("Median", f"{median_val:.2f}")
+                s3, s4, s5 = st.columns(3)
+                s3.metric("Mode", f"{mode_val:.2f}")
+                s4.metric("Q1 (25%)", f"{q1:.2f}")
+                s5.metric("Q3 (75%)", f"{q3:.2f}")
+
+            with right:
+                fig = px.histogram(
+                    series,
+                    x=col_id,
+                    nbins=20,
+                    labels={col_id: label},
+                    color_discrete_sequence=["#1A5FAD"],
+                )
+                fig.update_layout(
+                    margin=dict(t=20, b=20),
+                    xaxis_title=label,
+                    yaxis_title="Count",
+                    bargap=0.05,
+                    dragmode=False,
+                )
+                st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
+
             st.divider()
 
     # --- Categorical ---
@@ -142,17 +252,22 @@ if uploaded_file is not None:
             counts = df_categorical[col_id].value_counts().reset_index()
             counts.columns = ["value", "count"]
 
-            st.subheader(label)
+            left, right = st.columns([1, 2])
 
-            fig = px.pie(
-                counts,
-                names="value",
-                values="count",
-                color_discrete_sequence=px.colors.qualitative.Set2,
-            )
-            fig.update_traces(textposition="inside", textinfo="percent+label")
-            fig.update_layout(margin=dict(t=20, b=20), showlegend=True, dragmode=False)
-            st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
+            with left:
+                st.subheader(label)
+
+            with right:
+                fig = px.pie(
+                    counts,
+                    names="value",
+                    values="count",
+                    color_discrete_sequence=px.colors.qualitative.Set2,
+                )
+                fig.update_traces(textposition="inside", textinfo="percent+label")
+                fig.update_layout(margin=dict(t=20, b=20), showlegend=True, dragmode=False)
+                st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
+
             st.divider()
 
     # --- Text ---
@@ -182,6 +297,7 @@ if uploaded_file is not None:
             with st.spinner(f"Analysing {df_text.shape[1]} text column(s)..."):
                 analysis_results = run_analysis(df_text, column_map, groq_api_key)
             st.session_state["analysis_results"] = analysis_results
+            save_analysis(analysis_results)
 
         if "analysis_results" in st.session_state and st.session_state["analysis_results"]:
             results = st.session_state["analysis_results"]

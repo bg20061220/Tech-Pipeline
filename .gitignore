@@ -20,6 +20,9 @@ build/
 # Streamlit
 .streamlit/secrets.toml
 
+# Session cache
+.cache/
+
 # OS
 .DS_Store
 Thumbs.db
