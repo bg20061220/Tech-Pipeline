@@ -29,35 +29,6 @@ def _overall_summary(column_map, df_numerical, df_categorical, df_text, timestam
     except Exception:
         parts.append(f"{total} responses were collected.")
 
-    if not df_numerical.empty:
-        means = {}
-        for col in df_numerical.columns:
-            s = df_numerical[col].dropna().astype(float)
-            if not s.empty:
-                means[col] = s.mean()
-        if len(means) >= 2:
-            top = max(means, key=means.get)
-            low = min(means, key=means.get)
-            parts.append(
-                f"Highest rated: \"{column_map[top]['original']}\" (mean {means[top]:.1f}). "
-                f"Lowest rated: \"{column_map[low]['original']}\" (mean {means[low]:.1f})."
-            )
-        elif len(means) == 1:
-            col = list(means)[0]
-            parts.append(f"Average rating for \"{column_map[col]['original']}\": {means[col]:.1f}.")
-
-    if not df_categorical.empty:
-        highlights = []
-        for col in df_categorical.columns:
-            label = column_map[col]["original"]
-            vc = df_categorical[col].value_counts()
-            if len(vc) > 0:
-                top_val = vc.index[0]
-                top_pct = vc.iloc[0] / vc.sum() * 100
-                highlights.append(f"{top_pct:.0f}% selected \"{top_val}\" for \"{label}\"")
-        if highlights:
-            parts.append("Key categorical findings: " + "; ".join(highlights[:3]) + ".")
-
     if not df_text.empty:
         n = df_text.shape[1]
         word = "questions" if n > 1 else "question"
@@ -66,7 +37,7 @@ def _overall_summary(column_map, df_numerical, df_categorical, df_text, timestam
         if analysis_results:
             parts.append("AI-generated summaries are included in the Text Analysis section.")
 
-    return " ".join(parts)
+    return "\n".join(parts)
 
 
 def _numerical_context(series):
@@ -167,6 +138,8 @@ class SurveyPDF(FPDF):
 
     def stats_table(self, stats: dict):
         col_w = 180 / len(stats)
+        prev_margin = self.c_margin
+        self.c_margin = 2
         # Header row
         self.set_font("Helvetica", "B", 9)
         self.set_fill_color(240, 244, 250)
@@ -181,6 +154,7 @@ class SurveyPDF(FPDF):
         for val in stats.values():
             self.cell(col_w, 8, str(val), border=1, align="C")
         self.ln(5)
+        self.c_margin = prev_margin
         self.set_text_color(0, 0, 0)
 
 
@@ -230,6 +204,8 @@ def generate_report(
             "Text Cols": df_text.shape[1],
         }
         col_w = 180 / len(metrics)
+        prev_margin = pdf.c_margin
+        pdf.c_margin = 2
 
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(26, 95, 173)
@@ -243,6 +219,7 @@ def generate_report(
         for val in metrics.values():
             pdf.cell(col_w, 12, str(val), border=1, align="C")
         pdf.ln(12)
+        pdf.c_margin = prev_margin
 
         # Overall summary
         pdf.set_text_color(0, 0, 0)
@@ -251,6 +228,44 @@ def generate_report(
             column_map, df_numerical, df_categorical, df_text, timestamp, analysis_results
         )
         pdf.body_text(summary)
+
+        # Column map table
+        pdf.ln(4)
+        pdf.section_title("Column Map")
+
+        col_w_id = 22
+        col_w_type = 26
+        col_w_label = 180 - col_w_id - col_w_type
+
+        prev_margin = pdf.c_margin
+        pdf.c_margin = 2
+
+        # Header row
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(240, 244, 250)
+        pdf.set_text_color(26, 95, 173)
+        pdf.cell(col_w_id, 7, "Col ID", border=1, align="C", fill=True)
+        pdf.cell(col_w_label, 7, "Original Header", border=1, align="C", fill=True)
+        pdf.cell(col_w_type, 7, "Type", border=1, align="C", fill=True)
+        pdf.ln()
+
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(30, 30, 30)
+        row_h = 6
+        # Account for 2mm padding on each side when estimating max chars
+        max_label_chars = int((col_w_label - 4) // 1.85)
+        for col_id, info in column_map.items():
+            label = info["original"]
+            if len(label) > max_label_chars:
+                label = label[:max_label_chars - 3] + "..."
+            pdf.cell(col_w_id, row_h, col_id, border=1, align="C")
+            pdf.cell(col_w_label, row_h, label, border=1)
+            pdf.cell(col_w_type, row_h, info["type"], border=1, align="C")
+            pdf.ln()
+
+        pdf.c_margin = prev_margin
+        pdf.ln(4)
+        pdf.set_text_color(0, 0, 0)
 
         # ----------------------------------------------------------------
         # Numerical section
