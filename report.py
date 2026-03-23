@@ -102,11 +102,16 @@ def _categorical_context(counts_df):
 # ---------------------------------------------------------------------------
 
 def _fig_to_tempfile(fig, width=640, height=360):
-    img_bytes = pio.to_image(fig, format="png", width=width, height=height, scale=2)
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    tmp.write(img_bytes)
-    tmp.close()
-    return tmp.name
+    try:
+        img_bytes = pio.to_image(fig, format="png", width=width, height=height, scale=2)
+        if not img_bytes:
+            raise ValueError("kaleido returned empty image bytes")
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmp.write(img_bytes)
+        tmp.close()
+        return tmp.name
+    except Exception as e:
+        raise RuntimeError(f"Chart image export failed: {e}") from e
 
 
 # ---------------------------------------------------------------------------
@@ -292,9 +297,12 @@ def generate_report(
                     plot_bgcolor="white",
                     paper_bgcolor="white",
                 )
-                tmp = _fig_to_tempfile(fig)
-                temp_files.append(tmp)
-                pdf.image(tmp, w=170)
+                try:
+                    tmp = _fig_to_tempfile(fig)
+                    temp_files.append(tmp)
+                    pdf.image(tmp, w=170)
+                except RuntimeError as e:
+                    pdf.body_text(f"[Chart unavailable: {e}]")
                 pdf.ln(8)
 
         # ----------------------------------------------------------------
@@ -339,7 +347,10 @@ def generate_report(
                 pdf.body_text(info["summary"])
                 pdf.ln(3)
 
-        return bytes(pdf.output())
+        output = pdf.output(dest='S')
+        if isinstance(output, (bytes, bytearray)):
+            return bytes(output)
+        return output.encode("latin-1")
 
     finally:
         for f in temp_files:

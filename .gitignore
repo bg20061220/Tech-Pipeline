@@ -20,8 +20,18 @@ build/
 # Streamlit
 .streamlit/secrets.toml
 
-# Session cache
+# Session cache (pipeline state, persisted dataframes)
 .cache/
+
+# Storage (saved CSVs and generated PDF reports)
+.storage/
+
+# Temporary chart images (kaleido exports during PDF generation)
+*.png
+tmp*.png
+
+# Generated PDF reports
+*.pdf
 
 # OS
 .DS_Store
@@ -36,7 +46,5 @@ Thumbs.db
 *.xlsx
 *.xls
 
-
+# Markdown (plan docs, notes)
 *.md
-
-.env
