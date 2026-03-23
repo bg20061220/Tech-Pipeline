@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from streamlit_extras.metric_cards import style_metric_cards
 from pipeline import run_pipeline
 from analysis import run_analysis
+from report import generate_report
 
 load_dotenv()
 
@@ -15,7 +16,7 @@ CACHE_DIR = Path(".cache")
 
 # --- Cache helpers ---
 
-def save_session(column_map, timestamp, df_numerical, df_categorical, df_text, file_bytes):
+def save_session(column_map, timestamp, df_numerical, df_categorical, df_text, file_bytes, survey_name="Survey"):
     CACHE_DIR.mkdir(exist_ok=True)
     with open(CACHE_DIR / "column_map.json", "w") as f:
         json.dump(column_map, f)
@@ -24,12 +25,14 @@ def save_session(column_map, timestamp, df_numerical, df_categorical, df_text, f
     df_categorical.to_parquet(CACHE_DIR / "df_categorical.parquet")
     df_text.to_parquet(CACHE_DIR / "df_text.parquet")
     (CACHE_DIR / "uploaded_file.bin").write_bytes(file_bytes)
-    (CACHE_DIR / "session.json").write_text(json.dumps({"valid": True}))
+    (CACHE_DIR / "session.json").write_text(json.dumps({"valid": True, "survey_name": survey_name}))
 
 
 def load_session():
     if not (CACHE_DIR / "session.json").exists():
         return None
+    with open(CACHE_DIR / "session.json") as f:
+        meta = json.load(f)
     with open(CACHE_DIR / "column_map.json") as f:
         column_map = json.load(f)
     timestamp = pd.read_parquet(CACHE_DIR / "timestamp.parquet")["timestamp"]
@@ -37,7 +40,8 @@ def load_session():
     df_categorical = pd.read_parquet(CACHE_DIR / "df_categorical.parquet")
     df_text = pd.read_parquet(CACHE_DIR / "df_text.parquet")
     file_bytes = (CACHE_DIR / "uploaded_file.bin").read_bytes()
-    return column_map, timestamp, df_numerical, df_categorical, df_text, file_bytes
+    survey_name = meta.get("survey_name", "Survey")
+    return column_map, timestamp, df_numerical, df_categorical, df_text, file_bytes, survey_name
 
 
 def save_analysis(analysis_results):
@@ -60,7 +64,7 @@ def clear_session():
             f.unlink()
         CACHE_DIR.rmdir()
     for key in ["column_map", "timestamp", "df_numerical", "df_categorical", "df_text",
-                "file_bytes", "analysis_results"]:
+                "file_bytes", "survey_name", "analysis_results", "pdf_bytes"]:
         st.session_state.pop(key, None)
 
 
@@ -94,7 +98,8 @@ if "column_map" not in st.session_state:
          st.session_state["df_numerical"],
          st.session_state["df_categorical"],
          st.session_state["df_text"],
-         st.session_state["file_bytes"]) = cached
+         st.session_state["file_bytes"],
+         st.session_state["survey_name"]) = cached
         st.toast("Session restored from cache.", icon="✅")
 
 if "analysis_results" not in st.session_state:
@@ -106,6 +111,7 @@ if "analysis_results" not in st.session_state:
 uploaded_file = st.file_uploader("Drop your CSV file here", type=["csv"])
 
 if uploaded_file is not None:
+    survey_name = Path(uploaded_file.name).stem
     with st.spinner("Running pipeline..."):
         file_bytes = uploaded_file.read()
         uploaded_file.seek(0)
@@ -117,12 +123,14 @@ if uploaded_file is not None:
     st.session_state["df_categorical"] = result["df_categorical"]
     st.session_state["df_text"] = result["df_text"]
     st.session_state["file_bytes"] = file_bytes
+    st.session_state["survey_name"] = survey_name
     st.session_state.pop("analysis_results", None)
+    st.session_state.pop("pdf_bytes", None)
 
     save_session(
         result["column_map"], result["timestamp"],
         result["df_numerical"], result["df_categorical"], result["df_text"],
-        file_bytes,
+        file_bytes, survey_name,
     )
 
 # --- Render if session data exists ---
@@ -133,6 +141,7 @@ if "column_map" in st.session_state:
     df_categorical = st.session_state["df_categorical"]
     df_text = st.session_state["df_text"]
     file_bytes = st.session_state["file_bytes"]
+    survey_name = st.session_state.get("survey_name", "Survey")
 
     # Clear session button
     if st.button("🗑 Clear Session"):
@@ -297,6 +306,7 @@ if "column_map" in st.session_state:
             with st.spinner(f"Analysing {df_text.shape[1]} text column(s)..."):
                 analysis_results = run_analysis(df_text, column_map, groq_api_key)
             st.session_state["analysis_results"] = analysis_results
+            st.session_state.pop("pdf_bytes", None)
             save_analysis(analysis_results)
 
         if "analysis_results" in st.session_state and st.session_state["analysis_results"]:
@@ -305,3 +315,25 @@ if "column_map" in st.session_state:
                 st.markdown(f"**{info['question']}**")
                 st.write(info["summary"])
                 st.divider()
+
+    # --- PDF Report ---
+    st.divider()
+    st.markdown('<p class="section-header">PDF Report</p>', unsafe_allow_html=True)
+
+    if st.button("Generate Report"):
+        with st.spinner("Building PDF..."):
+            pdf_bytes = generate_report(
+                column_map, df_numerical, df_categorical, df_text, timestamp,
+                st.session_state.get("analysis_results"),
+                survey_name=survey_name,
+            )
+        st.session_state["pdf_bytes"] = pdf_bytes
+        st.success("Report ready.")
+
+    if "pdf_bytes" in st.session_state:
+        st.download_button(
+            label="Download PDF",
+            data=st.session_state["pdf_bytes"],
+            file_name=f"{survey_name}_report.pdf",
+            mime="application/pdf",
+        )
