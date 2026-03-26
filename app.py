@@ -9,6 +9,7 @@ from streamlit_extras.metric_cards import style_metric_cards
 from pipeline import run_pipeline
 from analysis import run_analysis
 from report import generate_report
+from transcript import analyze_transcript
 
 load_dotenv()
 
@@ -58,13 +59,32 @@ def load_analysis():
         return json.load(f)
 
 
+def save_transcript_result(result, text=None, name=None):
+    CACHE_DIR.mkdir(exist_ok=True)
+    if name:
+        result = {**result, "name": name}
+    with open(CACHE_DIR / "transcript_result.json", "w") as f:
+        json.dump(result, f)
+    if text:
+        (CACHE_DIR / "transcript_text.txt").write_text(text, encoding="utf-8")
+
+
+def load_transcript_result():
+    path = CACHE_DIR / "transcript_result.json"
+    if not path.exists():
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
 def clear_session():
     if CACHE_DIR.exists():
         for f in CACHE_DIR.iterdir():
             f.unlink()
         CACHE_DIR.rmdir()
     for key in ["column_map", "timestamp", "df_numerical", "df_categorical", "df_text",
-                "file_bytes", "survey_name", "analysis_results", "pdf_bytes"]:
+                "file_bytes", "survey_name", "analysis_results", "pdf_bytes",
+                "transcript_result", "transcript_text", "transcript_name"]:
         st.session_state.pop(key, None)
 
 
@@ -107,8 +127,19 @@ if "analysis_results" not in st.session_state:
     if cached_analysis:
         st.session_state["analysis_results"] = cached_analysis
 
-# --- File uploader ---
+if "transcript_result" not in st.session_state:
+    cached_transcript = load_transcript_result()
+    if cached_transcript:
+        st.session_state["transcript_result"] = cached_transcript
+        # Restore transcript metadata so the section renders after reload
+        transcript_path = CACHE_DIR / "transcript_text.txt"
+        if transcript_path.exists():
+            st.session_state.setdefault("transcript_text", transcript_path.read_text(encoding="utf-8"))
+            st.session_state.setdefault("transcript_name", cached_transcript.get("name", "Transcript"))
+
+# --- File uploaders ---
 uploaded_file = st.file_uploader("Drop your CSV file here", type=["csv"])
+uploaded_transcript = st.file_uploader("Drop an interview transcript here (.txt)", type=["txt"])
 
 if uploaded_file is not None:
     survey_name = Path(uploaded_file.name).stem
@@ -132,6 +163,52 @@ if uploaded_file is not None:
         result["df_numerical"], result["df_categorical"], result["df_text"],
         file_bytes, survey_name,
     )
+
+# --- Transcript uploader handler ---
+if uploaded_transcript is not None:
+    transcript_text = uploaded_transcript.read().decode("utf-8", errors="replace")
+    st.session_state["transcript_text"] = transcript_text
+    st.session_state["transcript_name"] = Path(uploaded_transcript.name).stem
+    st.session_state.pop("transcript_result", None)
+
+# --- Transcript Analysis section ---
+if "transcript_text" in st.session_state:
+    st.divider()
+    transcript_name = st.session_state.get("transcript_name", "Transcript")
+    st.markdown(f'<p class="section-header">Interview Transcript — {transcript_name}</p>', unsafe_allow_html=True)
+
+    env_key = os.getenv("GROQ_API_KEY", "")
+    if env_key:
+        transcript_api_key = env_key
+    else:
+        transcript_api_key = st.text_input("Groq API Key (transcript)", type="password", placeholder="gsk_...", key="transcript_api_key_input")
+
+    if st.button("Analyse Transcript", disabled=not (env_key or transcript_api_key)):
+        with st.spinner("Analysing transcript..."):
+            result = analyze_transcript(
+                st.session_state["transcript_text"],
+                env_key or transcript_api_key,
+            )
+        st.session_state["transcript_result"] = result
+        save_transcript_result(
+            result,
+            text=st.session_state["transcript_text"],
+            name=transcript_name,
+        )
+
+    if "transcript_result" in st.session_state:
+        result = st.session_state["transcript_result"]
+
+        if result.get("speakers"):
+            st.caption(f"Speakers detected: {', '.join(result['speakers'])}")
+
+        st.markdown("**Summary**")
+        st.write(result["summary"])
+
+        st.markdown("**Sentiment Analysis**")
+        st.write(result["sentiment"])
+
+    st.divider()
 
 # --- Render if session data exists ---
 if "column_map" in st.session_state:
