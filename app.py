@@ -1,11 +1,15 @@
 import os
+import io
 import json
+import base64
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.express as px
 from pathlib import Path
 from dotenv import load_dotenv
 from streamlit_extras.metric_cards import style_metric_cards
+from streamlit_js_eval import streamlit_js_eval
 from pipeline import run_pipeline
 from analysis import run_analysis
 from report import generate_report
@@ -13,78 +17,80 @@ from transcript import analyze_transcript
 
 load_dotenv()
 
-CACHE_DIR = Path(".cache")
+STORAGE_KEY = "tech_pipeline_cache"
+STORAGE_LIMIT_MB = 5
 
-# --- Cache helpers ---
+# --- Browser sessionStorage helpers ---
 
-def save_session(column_map, timestamp, df_numerical, df_categorical, df_text, file_bytes, survey_name="Survey"):
-    CACHE_DIR.mkdir(exist_ok=True)
-    with open(CACHE_DIR / "column_map.json", "w") as f:
-        json.dump(column_map, f)
-    timestamp.to_frame(name="timestamp").to_parquet(CACHE_DIR / "timestamp.parquet")
-    df_numerical.to_parquet(CACHE_DIR / "df_numerical.parquet")
-    df_categorical.to_parquet(CACHE_DIR / "df_categorical.parquet")
-    df_text.to_parquet(CACHE_DIR / "df_text.parquet")
-    (CACHE_DIR / "uploaded_file.bin").write_bytes(file_bytes)
-    (CACHE_DIR / "session.json").write_text(json.dumps({"valid": True, "survey_name": survey_name}))
-
-
-def load_session():
-    if not (CACHE_DIR / "session.json").exists():
-        return None
-    with open(CACHE_DIR / "session.json") as f:
-        meta = json.load(f)
-    with open(CACHE_DIR / "column_map.json") as f:
-        column_map = json.load(f)
-    timestamp = pd.read_parquet(CACHE_DIR / "timestamp.parquet")["timestamp"]
-    df_numerical = pd.read_parquet(CACHE_DIR / "df_numerical.parquet")
-    df_categorical = pd.read_parquet(CACHE_DIR / "df_categorical.parquet")
-    df_text = pd.read_parquet(CACHE_DIR / "df_text.parquet")
-    file_bytes = (CACHE_DIR / "uploaded_file.bin").read_bytes()
-    survey_name = meta.get("survey_name", "Survey")
-    return column_map, timestamp, df_numerical, df_categorical, df_text, file_bytes, survey_name
+def _build_payload():
+    payload = {}
+    if "column_map" in st.session_state:
+        payload["session"] = {
+            "column_map": st.session_state["column_map"],
+            "timestamp": pd.DataFrame({"timestamp": st.session_state["timestamp"]}).to_json(orient="split"),
+            "df_numerical": st.session_state["df_numerical"].to_json(orient="split"),
+            "df_categorical": st.session_state["df_categorical"].to_json(orient="split"),
+            "df_text": st.session_state["df_text"].to_json(orient="split"),
+            "file_bytes": base64.b64encode(st.session_state["file_bytes"]).decode(),
+            "survey_name": st.session_state.get("survey_name", "Survey"),
+        }
+    if "analysis_results" in st.session_state:
+        payload["analysis_results"] = st.session_state["analysis_results"]
+    if "transcript_result" in st.session_state:
+        payload["transcript_result"] = st.session_state["transcript_result"]
+        payload["transcript_text"] = st.session_state.get("transcript_text", "")
+        payload["transcript_name"] = st.session_state.get("transcript_name", "Transcript")
+    return json.dumps(payload)
 
 
-def save_analysis(analysis_results):
-    CACHE_DIR.mkdir(exist_ok=True)
-    with open(CACHE_DIR / "analysis_results.json", "w") as f:
-        json.dump(analysis_results, f)
+def save_cache():
+    payload_str = _build_payload()
+    size_mb = len(payload_str.encode()) / (1024 * 1024)
+    if size_mb > STORAGE_LIMIT_MB:
+        st.warning(
+            f"Session data is {size_mb:.1f} MB — exceeds the {STORAGE_LIMIT_MB} MB browser "
+            "sessionStorage limit. Your session will not be restored after a page refresh."
+        )
+        return
+    b64 = base64.b64encode(payload_str.encode()).decode()
+    components.html(
+        f"<script>sessionStorage.setItem('{STORAGE_KEY}', atob('{b64}'));</script>",
+        height=0,
+    )
 
 
-def load_analysis():
-    path = CACHE_DIR / "analysis_results.json"
-    if not path.exists():
-        return None
-    with open(path) as f:
-        return json.load(f)
-
-
-def save_transcript_result(result, text=None, name=None):
-    CACHE_DIR.mkdir(exist_ok=True)
-    if name:
-        result = {**result, "name": name}
-    with open(CACHE_DIR / "transcript_result.json", "w") as f:
-        json.dump(result, f)
-    if text:
-        (CACHE_DIR / "transcript_text.txt").write_text(text, encoding="utf-8")
-
-
-def load_transcript_result():
-    path = CACHE_DIR / "transcript_result.json"
-    if not path.exists():
-        return None
-    with open(path) as f:
-        return json.load(f)
+def restore_cache(json_str):
+    try:
+        data = json.loads(json_str)
+    except Exception:
+        return False
+    if "session" in data:
+        s = data["session"]
+        st.session_state["column_map"] = s["column_map"]
+        ts_df = pd.read_json(io.StringIO(s["timestamp"]), orient="split")
+        st.session_state["timestamp"] = pd.to_datetime(ts_df["timestamp"])
+        st.session_state["df_numerical"] = pd.read_json(io.StringIO(s["df_numerical"]), orient="split")
+        st.session_state["df_categorical"] = pd.read_json(io.StringIO(s["df_categorical"]), orient="split")
+        st.session_state["df_text"] = pd.read_json(io.StringIO(s["df_text"]), orient="split")
+        st.session_state["file_bytes"] = base64.b64decode(s["file_bytes"])
+        st.session_state["survey_name"] = s.get("survey_name", "Survey")
+    if "analysis_results" in data:
+        st.session_state["analysis_results"] = data["analysis_results"]
+    if "transcript_result" in data:
+        st.session_state["transcript_result"] = data["transcript_result"]
+        st.session_state["transcript_text"] = data.get("transcript_text", "")
+        st.session_state["transcript_name"] = data.get("transcript_name", "Transcript")
+    return True
 
 
 def clear_session():
-    if CACHE_DIR.exists():
-        for f in CACHE_DIR.iterdir():
-            f.unlink()
-        CACHE_DIR.rmdir()
+    components.html(
+        f"<script>sessionStorage.removeItem('{STORAGE_KEY}');</script>",
+        height=0,
+    )
     for key in ["column_map", "timestamp", "df_numerical", "df_categorical", "df_text",
                 "file_bytes", "survey_name", "analysis_results", "pdf_bytes",
-                "transcript_result", "transcript_text", "transcript_name"]:
+                "transcript_result", "transcript_text", "transcript_name", "storage_checked"]:
         st.session_state.pop(key, None)
 
 
@@ -109,33 +115,21 @@ st.markdown("""
 st.title("📊 Survey Analysis Pipeline")
 st.caption("Google Forms / Google Sheets export → typed dataframes ready for analysis.")
 
-# --- Load from cache into session_state on first run ---
-if "column_map" not in st.session_state:
-    cached = load_session()
-    if cached:
-        (st.session_state["column_map"],
-         st.session_state["timestamp"],
-         st.session_state["df_numerical"],
-         st.session_state["df_categorical"],
-         st.session_state["df_text"],
-         st.session_state["file_bytes"],
-         st.session_state["survey_name"]) = cached
-        st.toast("Session restored from cache.", icon="✅")
-
-if "analysis_results" not in st.session_state:
-    cached_analysis = load_analysis()
-    if cached_analysis:
-        st.session_state["analysis_results"] = cached_analysis
-
-if "transcript_result" not in st.session_state:
-    cached_transcript = load_transcript_result()
-    if cached_transcript:
-        st.session_state["transcript_result"] = cached_transcript
-        # Restore transcript metadata so the section renders after reload
-        transcript_path = CACHE_DIR / "transcript_text.txt"
-        if transcript_path.exists():
-            st.session_state.setdefault("transcript_text", transcript_path.read_text(encoding="utf-8"))
-            st.session_state.setdefault("transcript_name", cached_transcript.get("name", "Transcript"))
+# --- Restore from sessionStorage on first load ---
+# streamlit_js_eval is async: returns None on the first render while JS executes,
+# then returns the real value on the rerun it triggers. st.stop() blocks the rest
+# of the page from rendering until the storage check is complete.
+if "storage_checked" not in st.session_state:
+    cached_json = streamlit_js_eval(
+        js_expressions=f"sessionStorage.getItem('{STORAGE_KEY}') || '__empty__'",
+        key="init_cache_read",
+    )
+    if cached_json is None:
+        st.stop()
+    st.session_state["storage_checked"] = True
+    if cached_json != "__empty__":
+        if restore_cache(cached_json):
+            st.toast("Session restored from cache.", icon="✅")
 
 # --- File uploaders ---
 uploaded_file = st.file_uploader("Drop your CSV file here", type=["csv"])
@@ -158,11 +152,7 @@ if uploaded_file is not None:
     st.session_state.pop("analysis_results", None)
     st.session_state.pop("pdf_bytes", None)
 
-    save_session(
-        result["column_map"], result["timestamp"],
-        result["df_numerical"], result["df_categorical"], result["df_text"],
-        file_bytes, survey_name,
-    )
+    save_cache()
 
 # --- Transcript uploader handler ---
 if uploaded_transcript is not None:
@@ -190,11 +180,7 @@ if "transcript_text" in st.session_state:
                 env_key or transcript_api_key,
             )
         st.session_state["transcript_result"] = result
-        save_transcript_result(
-            result,
-            text=st.session_state["transcript_text"],
-            name=transcript_name,
-        )
+        save_cache()
 
     if "transcript_result" in st.session_state:
         result = st.session_state["transcript_result"]
@@ -265,7 +251,6 @@ if "column_map" in st.session_state:
             column_map[row["col_id"]]["type"] = row["type"]
 
         from pipeline import handle_nulls, split_dataframes, load_csv, rename_columns
-        import io
         raw_df = load_csv(io.BytesIO(file_bytes))
         df_internal = rename_columns(raw_df)
         df_internal = handle_nulls(df_internal, column_map)
@@ -276,7 +261,7 @@ if "column_map" in st.session_state:
         st.session_state["df_categorical"] = df_categorical
         st.session_state["df_text"] = df_text
 
-        save_session(column_map, timestamp, df_numerical, df_categorical, df_text, file_bytes)
+        save_cache()
 
     st.divider()
 
@@ -384,7 +369,7 @@ if "column_map" in st.session_state:
                 analysis_results = run_analysis(df_text, column_map, groq_api_key)
             st.session_state["analysis_results"] = analysis_results
             st.session_state.pop("pdf_bytes", None)
-            save_analysis(analysis_results)
+            save_cache()
 
         if "analysis_results" in st.session_state and st.session_state["analysis_results"]:
             results = st.session_state["analysis_results"]
