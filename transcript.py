@@ -87,6 +87,17 @@ def _infer_speaker_roles(turns: list) -> list:
     return [{"speaker": label_map[t["speaker"]], "text": t["text"]} for t in turns]
 
 
+def _filter_minor_speakers(turns: list, min_ratio: float = 0.08) -> list:
+    """
+    Remove turns from speakers whose share of total words is below min_ratio.
+    This drops noise labels (timestamps, stage directions, etc.) that the
+    regex misidentifies as speakers, as well as any truly minor participants.
+    """
+    ratio = _compute_talk_ratio(turns)
+    valid = {spk for spk, r in ratio.items() if r >= min_ratio}
+    return [t for t in turns if t["speaker"] in valid]
+
+
 def _chunk_by_words(turns: list, limit: int = WORDS_PER_CHUNK) -> list:
     """Split turns into chunks where each chunk is at most `limit` words."""
     chunks = []
@@ -199,6 +210,7 @@ def analyze_transcript(text: str, api_key: str) -> dict:
     if not turns:
         turns = [{"speaker": "Speaker", "text": text}]
 
+    turns = _filter_minor_speakers(turns)
     turns = _infer_speaker_roles(turns)
     speakers = list(dict.fromkeys(t["speaker"] for t in turns))
     talk_ratio = _compute_talk_ratio(turns)

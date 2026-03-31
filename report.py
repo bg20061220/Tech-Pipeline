@@ -507,21 +507,25 @@ def generate_transcript_report(
 
     _progress(0.25, "Writing summary...")
     pdf.section_title("Summary")
-    pdf.body_text(result.get("summary", ""))
+    pdf.body_text(result.get("summary") or "")
 
-    themes = result.get("themes", [])
+    themes = result.get("themes") or []
     _progress(0.40, "Writing themes...")
     if themes:
         pdf.section_title("Themes")
-        pdf.body_text("  *  ".join(themes))
+        pdf.body_text("  *  ".join(t for t in themes if t))
 
-    quotes = result.get("key_quotes", [])
+    quotes = result.get("key_quotes") or []
     _progress(0.55, "Writing key quotes...")
     if quotes:
         pdf.section_title("Key Quotes")
         for q in quotes:
-            speaker = _sanitize(q.get("speaker", ""))
-            quote = _sanitize(q.get("quote", ""))
+            if not isinstance(q, dict):
+                continue
+            speaker = _sanitize(q.get("speaker") or "")
+            quote = _sanitize(q.get("quote") or "")
+            if not quote:
+                continue
             pdf.set_font("Helvetica", "I", 10)
             pdf.set_text_color(50, 50, 50)
             pdf.multi_cell(0, 6, f'"{quote}"')
@@ -531,26 +535,28 @@ def generate_transcript_report(
             pdf.ln(4)
         pdf.set_text_color(0, 0, 0)
 
-    sentiment = result.get("sentiment", {})
+    sentiment = result.get("sentiment") or {}
     _progress(0.70, "Writing sentiment...")
     if sentiment:
         pdf.section_title("Sentiment")
         if isinstance(sentiment, str):
             pdf.body_text(sentiment)
         else:
-            overall = sentiment.get("overall", "")
-            tone = sentiment.get("tone", "")
+            overall = sentiment.get("overall") or ""
+            tone = sentiment.get("tone") or ""
             label = f"{overall.capitalize()} -- {tone}" if overall and tone else overall or tone
             if label:
                 pdf.body_text(label)
-            for moment in sentiment.get("notable_moments", []):
+            for moment in (sentiment.get("notable_moments") or []):
+                if not moment:
+                    continue
                 pdf.set_font("Helvetica", "", 10)
                 pdf.set_text_color(70, 70, 70)
                 pdf.multi_cell(0, 6, _sanitize(f"* {moment}"))
             pdf.ln(4)
             pdf.set_text_color(0, 0, 0)
 
-    speaker_sentiment = result.get("speaker_sentiment", {})
+    speaker_sentiment = result.get("speaker_sentiment") or {}
     _progress(0.85, "Writing speaker breakdown...")
     if speakers:
         pdf.section_title("Speaker Breakdown")

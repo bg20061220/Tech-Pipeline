@@ -272,7 +272,7 @@ if "transcript_text" in st.session_state:
                 t_pdf_progress.empty()
                 t_pdf_status.empty()
                 st.session_state["transcript_pdf_bytes"] = pdf_bytes
-                st.success("Report ready.")
+                st.rerun()
             except Exception as e:
                 t_pdf_progress.empty()
                 t_pdf_status.empty()
@@ -480,7 +480,7 @@ if "column_map" in st.session_state:
     st.divider()
     st.markdown('<p class="section-header">PDF Report</p>', unsafe_allow_html=True)
 
-    if st.button("Generate Report"):
+    if st.button("Generate Report", key="csv_generate_report"):
         progress_bar = st.progress(0, text="Starting...")
         status_text = st.empty()
 
