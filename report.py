@@ -115,6 +115,30 @@ def _fig_to_tempfile(fig, width=640, height=360):
 
 
 # ---------------------------------------------------------------------------
+# Unicode → latin-1 sanitizer
+# ---------------------------------------------------------------------------
+
+_UNICODE_REPLACEMENTS = {
+    "\u2014": "--",   # em dash
+    "\u2013": "-",    # en dash
+    "\u2018": "'",    # left single quote
+    "\u2019": "'",    # right single quote
+    "\u201c": '"',    # left double quote
+    "\u201d": '"',    # right double quote
+    "\u2026": "...",  # ellipsis
+    "\u00b7": "*",    # middle dot
+    "\u2022": "*",    # bullet
+    "\u00a0": " ",    # non-breaking space
+}
+
+def _sanitize(text: str) -> str:
+    """Replace common non-latin-1 characters, then drop anything else."""
+    for char, replacement in _UNICODE_REPLACEMENTS.items():
+        text = text.replace(char, replacement)
+    return text.encode("latin-1", errors="ignore").decode("latin-1")
+
+
+# ---------------------------------------------------------------------------
 # PDF class
 # ---------------------------------------------------------------------------
 
@@ -145,7 +169,7 @@ class SurveyPDF(FPDF):
     def section_title(self, text):
         self.set_font("Helvetica", "B", 13)
         self.set_text_color(26, 95, 173)
-        self.cell(0, 9, text.upper(), ln=True)
+        self.cell(0, 9, _sanitize(text).upper(), ln=True)
         self.set_draw_color(26, 95, 173)
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(4)
@@ -154,14 +178,14 @@ class SurveyPDF(FPDF):
     def column_title(self, text):
         self.set_font("Helvetica", "B", 11)
         self.set_text_color(30, 30, 30)
-        self.multi_cell(0, 7, text)
+        self.multi_cell(0, 7, _sanitize(text))
         self.ln(4)
         self.set_text_color(0, 0, 0)
 
     def body_text(self, text):
         self.set_font("Helvetica", "", 10)
         self.set_text_color(70, 70, 70)
-        self.multi_cell(0, 6, text)
+        self.multi_cell(0, 6, _sanitize(text))
         self.ln(5)
         self.set_text_color(0, 0, 0)
 
@@ -196,11 +220,36 @@ def generate_report(
     timestamp,
     analysis_results: dict | None,
     survey_name: str = "Survey",
+    progress_callback=None,
 ) -> bytes:
+    """
+    progress_callback(fraction: float, message: str) is called at each stage.
+    fraction is 0.0–1.0. Pass None to skip progress reporting.
+    """
+    def _progress(fraction, message):
+        if progress_callback:
+            progress_callback(fraction, message)
+
+    # Pre-compute column counts for proportional progress budgets.
+    n_num = df_numerical.shape[1] if not df_numerical.empty else 0
+    n_cat = df_categorical.shape[1] if not df_categorical.empty else 0
+    n_txt = len(analysis_results) if analysis_results else 0
+
+    # Progress budget per section (fractions of 1.0):
+    #   cover: 0.00 → 0.08
+    #   numerical: 0.08 → 0.50  (only if columns exist)
+    #   categorical: 0.50 → 0.80  (only if columns exist)
+    #   text analysis: 0.80 → 0.93  (only if results exist)
+    #   finalise: 0.93 → 1.00
+    NUM_START, NUM_END = 0.08, 0.50
+    CAT_START, CAT_END = 0.50, 0.80
+    TXT_START, TXT_END = 0.80, 0.93
+
     temp_files = []
 
     try:
-        pdf = SurveyPDF(survey_name)
+        _progress(0.0, "Building cover page...")
+        pdf = SurveyPDF(_sanitize(survey_name))
 
         # ----------------------------------------------------------------
         # Cover page
@@ -251,19 +300,25 @@ def generate_report(
             column_map, df_numerical, df_categorical, df_text, timestamp, analysis_results
         )
         pdf.body_text(summary)
+        _progress(0.08, "Cover page done.")
 
         # ----------------------------------------------------------------
         # Numerical section
         # ----------------------------------------------------------------
-        if not df_numerical.empty:
+        if n_num > 0:
             pdf.add_page()
-            pdf.section_title(f"Numerical Columns  ({df_numerical.shape[1]})")
+            pdf.section_title(f"Numerical Columns  ({n_num})")
 
-            for col_id in df_numerical.columns:
+            for i, col_id in enumerate(df_numerical.columns):
                 label = column_map.get(col_id, {}).get("original", col_id)
                 series = df_numerical[col_id].dropna().astype(float)
                 if series.empty:
                     continue
+
+                _progress(
+                    NUM_START + (i / n_num) * (NUM_END - NUM_START),
+                    f"Numerical: {label[:50]}...) " if len(label) > 50 else f"Numerical: {label}",
+                )
 
                 pdf.column_title(label)
 
@@ -306,17 +361,24 @@ def generate_report(
                     pdf.body_text(f"[Chart unavailable: {e}]")
                 pdf.ln(14)
 
+            _progress(NUM_END, f"Numerical section done ({n_num} columns).")
+
         # ----------------------------------------------------------------
         # Categorical section
         # ----------------------------------------------------------------
-        if not df_categorical.empty:
+        if n_cat > 0:
             pdf.add_page()
-            pdf.section_title(f"Categorical Columns  ({df_categorical.shape[1]})")
+            pdf.section_title(f"Categorical Columns  ({n_cat})")
 
-            for col_id in df_categorical.columns:
+            for i, col_id in enumerate(df_categorical.columns):
                 label = column_map.get(col_id, {}).get("original", col_id)
                 counts = df_categorical[col_id].value_counts().reset_index()
                 counts.columns = ["value", "count"]
+
+                _progress(
+                    CAT_START + (i / n_cat) * (CAT_END - CAT_START),
+                    f"Categorical: {label[:50]}..." if len(label) > 50 else f"Categorical: {label}",
+                )
 
                 pdf.column_title(label)
                 pdf.body_text(_categorical_context(counts))
@@ -337,26 +399,35 @@ def generate_report(
                 pdf.image(tmp, w=120, x=45)
                 pdf.ln(14)
 
+            _progress(CAT_END, f"Categorical section done ({n_cat} columns).")
+
         # ----------------------------------------------------------------
         # Text analysis section
         # ----------------------------------------------------------------
         if analysis_results:
             pdf.add_page()
             pdf.section_title("Text Field Analysis")
-            for info in analysis_results.values():
+            items = list(analysis_results.values())
+            for i, info in enumerate(items):
+                _progress(
+                    TXT_START + (i / len(items)) * (TXT_END - TXT_START),
+                    f"Text analysis: question {i + 1} of {len(items)}...",
+                )
                 pdf.column_title(info["question"])
                 pdf.body_text(info["summary"])
                 pdf.ln(3)
 
-        output = pdf.output()
-        print(f"[report] pdf.output() type={type(output).__name__} len={len(output) if output else 0}")
-        if not output:
-            # Try old fpdf-style output
-            output = pdf.output(dest='S')
-            print(f"[report] dest='S' fallback type={type(output).__name__} len={len(output) if output else 0}")
+            _progress(TXT_END, "Text analysis section done.")
+
+        _progress(0.93, "Finalising PDF...")
+        output = pdf.output(dest='S')
         if isinstance(output, (bytes, bytearray)):
-            return bytes(output)
-        return output.encode("latin-1")
+            result = bytes(output)
+        else:
+            result = output.encode("latin-1")
+
+        _progress(1.0, "Done.")
+        return result
 
     finally:
         for f in temp_files:

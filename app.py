@@ -417,14 +417,37 @@ if "column_map" in st.session_state:
     st.markdown('<p class="section-header">PDF Report</p>', unsafe_allow_html=True)
 
     if st.button("Generate Report"):
-        with st.spinner("Building PDF..."):
-            pdf_bytes = generate_report(
-                column_map, df_numerical, df_categorical, df_text, timestamp,
-                st.session_state.get("analysis_results"),
-                survey_name=survey_name,
-            )
-        st.session_state["pdf_bytes"] = pdf_bytes
-        st.success("Report ready.")
+        progress_bar = st.progress(0, text="Starting...")
+        status_text = st.empty()
+
+        def on_progress(fraction, message):
+            progress_bar.progress(min(fraction, 1.0), text=message)
+            status_text.text(message)
+
+        MAX_ATTEMPTS = 2
+        pdf_bytes = None
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                if attempt > 0:
+                    on_progress(0.0, "Something went wrong — retrying...")
+                pdf_bytes = generate_report(
+                    column_map, df_numerical, df_categorical, df_text, timestamp,
+                    st.session_state.get("analysis_results"),
+                    survey_name=survey_name,
+                    progress_callback=on_progress,
+                )
+                break
+            except Exception as e:
+                if attempt == MAX_ATTEMPTS - 1:
+                    progress_bar.empty()
+                    status_text.empty()
+                    st.error(f"Report generation failed: {e}")
+
+        if pdf_bytes:
+            progress_bar.empty()
+            status_text.empty()
+            st.session_state["pdf_bytes"] = pdf_bytes
+            st.success("Report ready.")
 
     if "pdf_bytes" in st.session_state:
         st.download_button(
