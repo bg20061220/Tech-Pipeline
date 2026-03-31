@@ -191,8 +191,42 @@ if "transcript_text" in st.session_state:
         st.markdown("**Summary**")
         st.write(result["summary"])
 
-        st.markdown("**Sentiment Analysis**")
-        st.write(result["sentiment"])
+        if result.get("themes"):
+            st.markdown("**Themes**")
+            st.write("  ·  ".join(f"`{t}`" for t in result["themes"]))
+
+        if result.get("key_quotes"):
+            st.markdown("**Key Quotes**")
+            for q in result["key_quotes"]:
+                st.markdown(f"> *\"{q['quote']}\"*  \n> — **{q['speaker']}**")
+
+        sentiment = result.get("sentiment", {})
+        if sentiment:
+            st.markdown("**Sentiment**")
+            if isinstance(sentiment, str):
+                st.write(sentiment)
+            else:
+                overall = sentiment.get("overall", "")
+                tone = sentiment.get("tone", "")
+                label = f"{overall.capitalize()} — {tone}" if overall and tone else overall or tone
+                if label:
+                    st.write(label)
+                for moment in sentiment.get("notable_moments", []):
+                    st.markdown(f"- {moment}")
+
+        speaker_sentiment = result.get("speaker_sentiment", {})
+        talk_ratio = result.get("talk_ratio", {})
+        if speaker_sentiment or talk_ratio:
+            st.markdown("**Speaker Breakdown**")
+            rows = [
+                {
+                    "Speaker": spk,
+                    "Talk Ratio": f"{talk_ratio.get(spk, 0):.0%}",
+                    "Sentiment": speaker_sentiment.get(spk, "—"),
+                }
+                for spk in result.get("speakers", list(speaker_sentiment.keys()))
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
     st.divider()
 
