@@ -413,8 +413,8 @@ def generate_report(
                     TXT_START + (i / len(items)) * (TXT_END - TXT_START),
                     f"Text analysis: question {i + 1} of {len(items)}...",
                 )
-                pdf.column_title(info["question"])
-                pdf.body_text(info["summary"])
+                pdf.column_title(info.get("question") or "")
+                pdf.body_text(info.get("summary") or "")
                 pdf.ln(3)
 
             _progress(TXT_END, "Text analysis section done.")

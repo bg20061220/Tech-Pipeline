@@ -14,20 +14,38 @@ Survey CSV and interview transcript analysis tool with AI summaries and PDF repo
 pip install git+https://github.com/goelb/Tech-Pipeline.git
 ```
 
-**3. Create a `.env` file** in any folder with your Groq API key:
+**3. Create a `.env` file** with your Groq API key. Pick a folder you'll always run the app from (e.g. Documents), then run:
+
+**Windows (PowerShell):**
 ```
-GROQ_API_KEY=your_key_here
+cd $env:USERPROFILE\Documents
+echo "GROQ_API_KEY=your_key_here" > .env
 ```
+
+**Mac / Linux:**
+```
+cd ~/Documents
+echo "GROQ_API_KEY=your_key_here" > .env
+```
+
 Get a free key at [console.groq.com](https://console.groq.com).
 
 ---
 
 ## Running
 
-Navigate to your `.env` folder and run:
+**Windows (PowerShell):**
 ```
+cd $env:USERPROFILE\Documents
 tech-pipeline
 ```
+
+**Mac / Linux:**
+```
+cd ~/Documents
+tech-pipeline
+```
+
 Browser opens automatically. Enter the password when prompted (ask the team lead).
 
 ---

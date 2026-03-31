@@ -294,7 +294,7 @@ if "transcript_text" in st.session_state:
                 t_pdf_progress.empty()
                 t_pdf_status.empty()
                 st.session_state["transcript_pdf_bytes"] = pdf_bytes
-                st.rerun()
+                st.success("Report ready.")
             except Exception as e:
                 t_pdf_progress.empty()
                 t_pdf_status.empty()
@@ -510,6 +510,9 @@ if "column_map" in st.session_state:
             progress_bar.progress(min(fraction, 1.0), text=message)
             status_text.text(message)
 
+        # Snapshot analysis_results now so it can't silently go missing mid-call
+        _analysis_snapshot = st.session_state.get("analysis_results") or None
+
         MAX_ATTEMPTS = 2
         pdf_bytes = None
         for attempt in range(MAX_ATTEMPTS):
@@ -518,7 +521,7 @@ if "column_map" in st.session_state:
                     on_progress(0.0, "Something went wrong — retrying...")
                 pdf_bytes = generate_report(
                     column_map, df_numerical, df_categorical, df_text, timestamp,
-                    st.session_state.get("analysis_results"),
+                    _analysis_snapshot,
                     survey_name=survey_name,
                     progress_callback=on_progress,
                 )
