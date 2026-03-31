@@ -3,8 +3,10 @@ Interview Transcript Analyzer
 
 Architecture:
 - Parses transcript into speaker turns (natural chunk boundaries)
-- Short transcripts (≤ TURNS_PER_CHUNK): single structured API call
+- Generic speaker names (Speaker 1/2, Unknown) relabeled Interviewer/Interviewee via question-frequency heuristic
+- Short transcripts (≤ 3500 words): single structured API call
 - Long transcripts: map-reduce — analyze each chunk, then synthesize into final output
+- Chunking is word-count based (~3500 words per chunk), never split mid-turn
 - Talk ratio computed locally (no API cost)
 - All LLM responses use JSON mode for reliable structured output
 """
@@ -14,7 +16,12 @@ import json
 from collections import Counter
 from groq import Groq
 
-TURNS_PER_CHUNK = 15
+WORDS_PER_CHUNK = 3500
+
+_GENERIC_SPEAKER_RE = re.compile(
+    r'^(speaker\s*\d+|unknown(\s+speaker)?|interviewee?|participant\s*\d*)$',
+    re.IGNORECASE,
+)
 
 
 def parse_transcript(text: str) -> list:
@@ -49,6 +56,54 @@ def parse_transcript(text: str) -> list:
         turns.append({"speaker": current_speaker, "text": " ".join(current_lines)})
 
     return turns
+
+
+def _infer_speaker_roles(turns: list) -> list:
+    """
+    If all speaker names look generic (Speaker 1, Unknown, etc.) and there are
+    exactly 2 speakers, relabel the one who asks more questions as 'Interviewer'
+    and the other as 'Interviewee'.
+    """
+    speakers = list(dict.fromkeys(t["speaker"] for t in turns))
+    if len(speakers) != 2:
+        return turns
+    if not all(_GENERIC_SPEAKER_RE.match(s) for s in speakers):
+        return turns
+
+    question_counts = {s: 0 for s in speakers}
+    turn_counts = {s: 0 for s in speakers}
+    for t in turns:
+        turn_counts[t["speaker"]] += 1
+        if t["text"].rstrip().endswith("?"):
+            question_counts[t["speaker"]] += 1
+
+    ratios = {s: question_counts[s] / turn_counts[s] for s in speakers}
+    if ratios[speakers[0]] == ratios[speakers[1]]:
+        return turns
+
+    interviewer = max(ratios, key=ratios.get)
+    interviewee = [s for s in speakers if s != interviewer][0]
+    label_map = {interviewer: "Interviewer", interviewee: "Interviewee"}
+    return [{"speaker": label_map[t["speaker"]], "text": t["text"]} for t in turns]
+
+
+def _chunk_by_words(turns: list, limit: int = WORDS_PER_CHUNK) -> list:
+    """Split turns into chunks where each chunk is at most `limit` words."""
+    chunks = []
+    current_chunk = []
+    current_words = 0
+    for turn in turns:
+        turn_words = len(turn["text"].split())
+        if current_chunk and current_words + turn_words > limit:
+            chunks.append(current_chunk)
+            current_chunk = [turn]
+            current_words = turn_words
+        else:
+            current_chunk.append(turn)
+            current_words += turn_words
+    if current_chunk:
+        chunks.append(current_chunk)
+    return chunks
 
 
 def _turns_to_text(turns: list) -> str:
@@ -144,10 +199,11 @@ def analyze_transcript(text: str, api_key: str) -> dict:
     if not turns:
         turns = [{"speaker": "Speaker", "text": text}]
 
+    turns = _infer_speaker_roles(turns)
     speakers = list(dict.fromkeys(t["speaker"] for t in turns))
     talk_ratio = _compute_talk_ratio(turns)
 
-    chunks = [turns[i:i + TURNS_PER_CHUNK] for i in range(0, len(turns), TURNS_PER_CHUNK)]
+    chunks = _chunk_by_words(turns)
 
     if len(chunks) == 1:
         final = _analyze_full(client, _turns_to_text(chunks[0]), speakers)

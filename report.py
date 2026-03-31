@@ -435,3 +435,142 @@ def generate_report(
                 Path(f).unlink()
             except Exception:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Transcript Report
+# ---------------------------------------------------------------------------
+
+def generate_transcript_report(
+    result: dict,
+    transcript_name: str = "Transcript",
+    progress_callback=None,
+) -> bytes:
+    """
+    Generate a PDF report from transcript analysis results.
+    No charts — text and tables only.
+    progress_callback(fraction: float, message: str) is optional.
+    """
+    def _progress(fraction, message):
+        if progress_callback:
+            progress_callback(fraction, message)
+
+    _progress(0.0, "Building cover page...")
+    pdf = SurveyPDF(_sanitize(transcript_name))
+
+    # ----------------------------------------------------------------
+    # Cover page
+    # ----------------------------------------------------------------
+    pdf.add_page()
+    pdf.ln(16)
+    pdf.set_font("Helvetica", "B", 24)
+    pdf.set_text_color(26, 95, 173)
+    pdf.multi_cell(0, 13, "Interview Transcript Analysis", align="C")
+    pdf.ln(3)
+
+    pdf.set_font("Helvetica", "", 13)
+    pdf.set_text_color(80, 80, 80)
+    pdf.multi_cell(0, 8, _sanitize(transcript_name), align="C")
+    pdf.ln(2)
+
+    pdf.set_font("Helvetica", "I", 10)
+    pdf.cell(0, 8, f"Generated {datetime.now().strftime('%B %d, %Y at %H:%M')}", align="C", ln=True)
+    pdf.ln(10)
+
+    speakers = result.get("speakers", [])
+    talk_ratio = result.get("talk_ratio", {})
+
+    if speakers:
+        metrics = {"Speakers": str(len(speakers))}
+        for spk in speakers:
+            metrics[_sanitize(spk)] = f"{talk_ratio.get(spk, 0):.0%}"
+        col_w = 180 / len(metrics)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(26, 95, 173)
+        pdf.set_fill_color(240, 244, 250)
+        for label in metrics:
+            pdf.cell(col_w, 8, label, border=1, align="C", fill=True)
+        pdf.ln()
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.set_text_color(30, 30, 30)
+        for val in metrics.values():
+            pdf.cell(col_w, 12, val, border=1, align="C")
+        pdf.ln(12)
+        pdf.set_text_color(0, 0, 0)
+
+    _progress(0.15, "Cover page done.")
+
+    # ----------------------------------------------------------------
+    # Analysis page
+    # ----------------------------------------------------------------
+    pdf.add_page()
+
+    _progress(0.25, "Writing summary...")
+    pdf.section_title("Summary")
+    pdf.body_text(result.get("summary", ""))
+
+    themes = result.get("themes", [])
+    _progress(0.40, "Writing themes...")
+    if themes:
+        pdf.section_title("Themes")
+        pdf.body_text("  *  ".join(themes))
+
+    quotes = result.get("key_quotes", [])
+    _progress(0.55, "Writing key quotes...")
+    if quotes:
+        pdf.section_title("Key Quotes")
+        for q in quotes:
+            speaker = _sanitize(q.get("speaker", ""))
+            quote = _sanitize(q.get("quote", ""))
+            pdf.set_font("Helvetica", "I", 10)
+            pdf.set_text_color(50, 50, 50)
+            pdf.multi_cell(0, 6, f'"{quote}"')
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(26, 95, 173)
+            pdf.cell(0, 6, f"-- {speaker}", ln=True)
+            pdf.ln(4)
+        pdf.set_text_color(0, 0, 0)
+
+    sentiment = result.get("sentiment", {})
+    _progress(0.70, "Writing sentiment...")
+    if sentiment:
+        pdf.section_title("Sentiment")
+        if isinstance(sentiment, str):
+            pdf.body_text(sentiment)
+        else:
+            overall = sentiment.get("overall", "")
+            tone = sentiment.get("tone", "")
+            label = f"{overall.capitalize()} -- {tone}" if overall and tone else overall or tone
+            if label:
+                pdf.body_text(label)
+            for moment in sentiment.get("notable_moments", []):
+                pdf.set_font("Helvetica", "", 10)
+                pdf.set_text_color(70, 70, 70)
+                pdf.multi_cell(0, 6, _sanitize(f"* {moment}"))
+            pdf.ln(4)
+            pdf.set_text_color(0, 0, 0)
+
+    speaker_sentiment = result.get("speaker_sentiment", {})
+    _progress(0.85, "Writing speaker breakdown...")
+    if speakers:
+        pdf.section_title("Speaker Breakdown")
+        if talk_ratio:
+            pdf.stats_table({_sanitize(spk): f"{talk_ratio.get(spk, 0):.0%}" for spk in speakers})
+        if speaker_sentiment:
+            for spk in speakers:
+                sent = speaker_sentiment.get(spk)
+                if sent:
+                    pdf.set_font("Helvetica", "B", 10)
+                    pdf.set_text_color(30, 30, 30)
+                    pdf.cell(0, 7, _sanitize(spk), ln=True)
+                    pdf.body_text(sent)
+
+    _progress(0.93, "Finalising PDF...")
+    output = pdf.output(dest='S')
+    if isinstance(output, (bytes, bytearray)):
+        pdf_bytes = bytes(output)
+    else:
+        pdf_bytes = output.encode("latin-1")
+
+    _progress(1.0, "Done.")
+    return pdf_bytes

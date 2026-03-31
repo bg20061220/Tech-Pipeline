@@ -2,6 +2,7 @@ import os
 import io
 import json
 import base64
+import time
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -12,7 +13,7 @@ from streamlit_extras.metric_cards import style_metric_cards
 from streamlit_js_eval import streamlit_js_eval
 from pipeline import run_pipeline
 from analysis import run_analysis
-from report import generate_report
+from report import generate_report, generate_transcript_report
 from transcript import analyze_transcript
 
 load_dotenv()
@@ -90,8 +91,11 @@ def clear_session():
     )
     for key in ["column_map", "timestamp", "df_numerical", "df_categorical", "df_text",
                 "file_bytes", "survey_name", "analysis_results", "pdf_bytes",
-                "transcript_result", "transcript_text", "transcript_name", "storage_checked"]:
+                "transcript_result", "transcript_text", "transcript_name", "transcript_pdf_bytes"]:
         st.session_state.pop(key, None)
+    # Keep storage_checked=True so the startup restore block doesn't re-read
+    # sessionStorage before the clear script has had a chance to execute.
+    st.session_state["storage_checked"] = True
 
 
 # --- Page config ---
@@ -156,10 +160,15 @@ if uploaded_file is not None:
 
 # --- Transcript uploader handler ---
 if uploaded_transcript is not None:
-    transcript_text = uploaded_transcript.read().decode("utf-8", errors="replace")
-    st.session_state["transcript_text"] = transcript_text
-    st.session_state["transcript_name"] = Path(uploaded_transcript.name).stem
-    st.session_state.pop("transcript_result", None)
+    if not uploaded_transcript.name.lower().endswith(".txt"):
+        st.error(f'"{uploaded_transcript.name}" is not a .txt file. Only plain text (.txt) transcripts are supported.')
+        uploaded_transcript = None
+    else:
+        transcript_text = uploaded_transcript.read().decode("utf-8", errors="replace")
+        st.session_state["transcript_text"] = transcript_text
+        st.session_state["transcript_name"] = Path(uploaded_transcript.name).stem
+        st.session_state.pop("transcript_result", None)
+        st.session_state.pop("transcript_pdf_bytes", None)
 
 # --- Transcript Analysis section ---
 if "transcript_text" in st.session_state:
@@ -174,12 +183,28 @@ if "transcript_text" in st.session_state:
         transcript_api_key = st.text_input("Groq API Key (transcript)", type="password", placeholder="gsk_...", key="transcript_api_key_input")
 
     if st.button("Analyse Transcript", disabled=not (env_key or transcript_api_key)):
-        with st.spinner("Analysing transcript..."):
-            result = analyze_transcript(
-                st.session_state["transcript_text"],
-                env_key or transcript_api_key,
-            )
+        t_progress = st.progress(0, text="Starting analysis...")
+        t_status = st.empty()
+        steps = [
+            (0.1, "Parsing transcript..."),
+            (0.3, "Identifying speakers..."),
+            (0.5, "Sending to LLM..."),
+            (0.8, "Processing response..."),
+            (0.95, "Finalising..."),
+        ]
+        for frac, msg in steps:
+            t_progress.progress(frac, text=msg)
+            t_status.text(msg)
+            time.sleep(0.3)
+        result = analyze_transcript(
+            st.session_state["transcript_text"],
+            env_key or transcript_api_key,
+        )
+        t_progress.progress(1.0, text="Done.")
+        t_progress.empty()
+        t_status.empty()
         st.session_state["transcript_result"] = result
+        st.session_state.pop("transcript_pdf_bytes", None)
         save_cache()
 
     if "transcript_result" in st.session_state:
@@ -227,6 +252,45 @@ if "transcript_text" in st.session_state:
                 for spk in result.get("speakers", list(speaker_sentiment.keys()))
             ]
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        # --- Transcript PDF ---
+        st.divider()
+        if st.button("Generate Report", key="transcript_generate_report"):
+            t_pdf_progress = st.progress(0, text="Starting...")
+            t_pdf_status = st.empty()
+
+            def on_transcript_progress(fraction, message):
+                t_pdf_progress.progress(min(fraction, 1.0), text=message)
+                t_pdf_status.text(message)
+
+            try:
+                pdf_bytes = generate_transcript_report(
+                    result,
+                    transcript_name=transcript_name,
+                    progress_callback=on_transcript_progress,
+                )
+                t_pdf_progress.empty()
+                t_pdf_status.empty()
+                st.session_state["transcript_pdf_bytes"] = pdf_bytes
+                st.success("Report ready.")
+            except Exception as e:
+                t_pdf_progress.empty()
+                t_pdf_status.empty()
+                st.error(f"Report generation failed: {e}")
+
+        if "transcript_pdf_bytes" in st.session_state:
+            st.download_button(
+                label="Download PDF",
+                data=st.session_state["transcript_pdf_bytes"],
+                file_name=f"{transcript_name}_transcript_report.pdf",
+                mime="application/pdf",
+            )
+
+    # Clear transcript button
+    if st.button("🗑 Clear Transcript"):
+        for key in ["transcript_text", "transcript_name", "transcript_result", "transcript_pdf_bytes"]:
+            st.session_state.pop(key, None)
+        st.rerun()
 
     st.divider()
 
