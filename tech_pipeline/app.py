@@ -3,6 +3,7 @@ import io
 import json
 import base64
 import time
+import hashlib
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -17,6 +18,27 @@ from report import generate_report, generate_transcript_report
 from transcript import analyze_transcript
 
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Password gate
+# ---------------------------------------------------------------------------
+_PASSWORD_HASH = "7dde76c40c3b97bc9d78d15a7d887e79db1854cbdd13b1e71fad2b6ee3151fe4"
+
+def _check_password(entered: str) -> bool:
+    return hashlib.sha256(entered.encode()).hexdigest() == _PASSWORD_HASH
+
+if not st.session_state.get("authenticated"):
+    st.set_page_config(page_title="Survey Analysis Pipeline", layout="wide", page_icon="📊")
+    st.title("Survey Analysis Pipeline")
+    st.markdown("Enter the password to continue.")
+    pwd = st.text_input("Password", type="password", key="login_pwd")
+    if st.button("Login"):
+        if _check_password(pwd):
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    st.stop()
 
 STORAGE_KEY = "tech_pipeline_cache"
 STORAGE_LIMIT_MB = 5
@@ -98,7 +120,7 @@ def clear_session():
     st.session_state["storage_checked"] = True
 
 
-# --- Page config ---
+# --- Page config (only reached after authentication) ---
 
 st.set_page_config(page_title="Survey Analysis Pipeline", layout="wide", page_icon="📊")
 

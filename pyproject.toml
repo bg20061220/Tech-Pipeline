@@ -1,10 +1,11 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=70"]
 build-backend = "setuptools.backends.legacy:build"
 
 [project]
-name = "survey-pipeline"
+name = "tech-pipeline"
 version = "0.1.0"
+description = "Survey & Transcript Analysis Pipeline"
 requires-python = ">=3.10"
 dependencies = [
     "streamlit>=1.32.0",
@@ -16,8 +17,15 @@ dependencies = [
     "groq>=0.5.0",
     "python-dotenv>=1.0.0",
     "streamlit-extras>=0.3.0",
+    "streamlit-js-eval>=0.1.0",
 ]
+
+[project.scripts]
+tech-pipeline = "tech_pipeline.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = [".venv*", ".cache*"]
+include = ["tech_pipeline*"]
+
+[tool.setuptools.package-data]
+tech_pipeline = [".streamlit/config.toml"]
