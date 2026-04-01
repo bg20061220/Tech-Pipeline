@@ -113,7 +113,8 @@ def clear_session():
     )
     for key in ["column_map", "timestamp", "df_numerical", "df_categorical", "df_text",
                 "file_bytes", "survey_name", "analysis_results", "pdf_bytes",
-                "transcript_result", "transcript_text", "transcript_name", "transcript_pdf_bytes"]:
+                "transcript_result", "transcript_text", "transcript_name", "transcript_pdf_bytes",
+                "_csv_file_sig", "_transcript_file_sig"]:
         st.session_state.pop(key, None)
     # Keep storage_checked=True so the startup restore block doesn't re-read
     # sessionStorage before the clear script has had a chance to execute.
@@ -162,23 +163,26 @@ uploaded_file = st.file_uploader("Drop your CSV file here", type=["csv"])
 uploaded_transcript = st.file_uploader("Drop an interview transcript here (.txt)", type=["txt"])
 
 if uploaded_file is not None:
-    survey_name = Path(uploaded_file.name).stem
-    with st.spinner("Running pipeline..."):
-        file_bytes = uploaded_file.read()
-        uploaded_file.seek(0)
-        result = run_pipeline(uploaded_file)
+    _csv_sig = (uploaded_file.name, uploaded_file.size)
+    if _csv_sig != st.session_state.get("_csv_file_sig"):
+        st.session_state["_csv_file_sig"] = _csv_sig
+        survey_name = Path(uploaded_file.name).stem
+        with st.spinner("Running pipeline..."):
+            file_bytes = uploaded_file.read()
+            uploaded_file.seek(0)
+            result = run_pipeline(uploaded_file)
 
-    st.session_state["column_map"] = result["column_map"]
-    st.session_state["timestamp"] = result["timestamp"]
-    st.session_state["df_numerical"] = result["df_numerical"]
-    st.session_state["df_categorical"] = result["df_categorical"]
-    st.session_state["df_text"] = result["df_text"]
-    st.session_state["file_bytes"] = file_bytes
-    st.session_state["survey_name"] = survey_name
-    st.session_state.pop("analysis_results", None)
-    st.session_state.pop("pdf_bytes", None)
+        st.session_state["column_map"] = result["column_map"]
+        st.session_state["timestamp"] = result["timestamp"]
+        st.session_state["df_numerical"] = result["df_numerical"]
+        st.session_state["df_categorical"] = result["df_categorical"]
+        st.session_state["df_text"] = result["df_text"]
+        st.session_state["file_bytes"] = file_bytes
+        st.session_state["survey_name"] = survey_name
+        st.session_state.pop("analysis_results", None)
+        st.session_state.pop("pdf_bytes", None)
 
-    save_cache()
+        save_cache()
 
 # --- Transcript uploader handler ---
 if uploaded_transcript is not None:
@@ -186,11 +190,14 @@ if uploaded_transcript is not None:
         st.error(f'"{uploaded_transcript.name}" is not a .txt file. Only plain text (.txt) transcripts are supported.')
         uploaded_transcript = None
     else:
-        transcript_text = uploaded_transcript.read().decode("utf-8", errors="replace")
-        st.session_state["transcript_text"] = transcript_text
-        st.session_state["transcript_name"] = Path(uploaded_transcript.name).stem
-        st.session_state.pop("transcript_result", None)
-        st.session_state.pop("transcript_pdf_bytes", None)
+        _transcript_sig = (uploaded_transcript.name, uploaded_transcript.size)
+        if _transcript_sig != st.session_state.get("_transcript_file_sig"):
+            st.session_state["_transcript_file_sig"] = _transcript_sig
+            transcript_text = uploaded_transcript.read().decode("utf-8", errors="replace")
+            st.session_state["transcript_text"] = transcript_text
+            st.session_state["transcript_name"] = Path(uploaded_transcript.name).stem
+            st.session_state.pop("transcript_result", None)
+            st.session_state.pop("transcript_pdf_bytes", None)
 
 # --- Transcript Analysis section ---
 if "transcript_text" in st.session_state:
@@ -294,11 +301,17 @@ if "transcript_text" in st.session_state:
                 t_pdf_progress.empty()
                 t_pdf_status.empty()
                 st.session_state["transcript_pdf_bytes"] = pdf_bytes
+                st.session_state["transcript_pdf_error"] = None
                 st.success("Report ready.")
             except Exception as e:
                 t_pdf_progress.empty()
                 t_pdf_status.empty()
-                st.error(f"Report generation failed: {e}")
+                import traceback
+                st.session_state["transcript_pdf_error"] = traceback.format_exc()
+
+        if st.session_state.get("transcript_pdf_error"):
+            st.error("Report generation failed:")
+            st.code(st.session_state["transcript_pdf_error"])
 
         if "transcript_pdf_bytes" in st.session_state:
             st.download_button(
@@ -512,6 +525,8 @@ if "column_map" in st.session_state:
 
         # Snapshot analysis_results now so it can't silently go missing mid-call
         _analysis_snapshot = st.session_state.get("analysis_results") or None
+        if not _analysis_snapshot:
+            st.warning("No text analysis found — text section will be omitted. Run 'Run Analysis on Text Fields' first.")
 
         MAX_ATTEMPTS = 2
         pdf_bytes = None
@@ -528,9 +543,14 @@ if "column_map" in st.session_state:
                 break
             except Exception as e:
                 if attempt == MAX_ATTEMPTS - 1:
+                    import traceback
                     progress_bar.empty()
                     status_text.empty()
-                    st.error(f"Report generation failed: {e}")
+                    st.session_state["csv_pdf_error"] = traceback.format_exc()
+
+        if st.session_state.get("csv_pdf_error") and not pdf_bytes:
+            st.error("Report generation failed:")
+            st.code(st.session_state["csv_pdf_error"])
 
         if pdf_bytes:
             progress_bar.empty()
