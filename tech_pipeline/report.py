@@ -167,15 +167,18 @@ class SurveyPDF(FPDF):
         self.cell(0, 8, f"Page {self.page_no()}", align="C")
 
     def section_title(self, text):
+        self.set_x(self.l_margin)
         self.set_font("Helvetica", "B", 13)
         self.set_text_color(26, 95, 173)
         self.cell(0, 9, _sanitize(text).upper(), ln=True)
+        self.set_x(self.l_margin)
         self.set_draw_color(26, 95, 173)
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(4)
         self.set_text_color(0, 0, 0)
 
     def column_title(self, text):
+        self.set_x(self.l_margin)
         self.set_font("Helvetica", "B", 11)
         self.set_text_color(30, 30, 30)
         self.multi_cell(0, 7, _sanitize(text))
@@ -183,6 +186,7 @@ class SurveyPDF(FPDF):
         self.set_text_color(0, 0, 0)
 
     def body_text(self, text):
+        self.set_x(self.l_margin)
         self.set_font("Helvetica", "", 10)
         self.set_text_color(70, 70, 70)
         self.multi_cell(0, 6, _sanitize(text))
@@ -550,6 +554,7 @@ def generate_transcript_report(
             for moment in (sentiment.get("notable_moments") or []):
                 if not moment:
                     continue
+                pdf.set_x(pdf.l_margin)
                 pdf.set_font("Helvetica", "", 10)
                 pdf.set_text_color(70, 70, 70)
                 pdf.multi_cell(0, 6, _sanitize(f"* {moment}"))
