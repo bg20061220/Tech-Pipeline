@@ -11,7 +11,7 @@ Survey CSV and interview transcript analysis tool with AI summaries and PDF repo
 
 **2. Install the app**
 ```
-pip install git+https://github.com/goelb/Tech-Pipeline.git
+pip install git+https://github.com/bg20061220/Tech-Pipeline.git
 ```
 
 **3. Create a `.env` file** with your Groq API key. Pick a folder you'll always run the app from (e.g. Documents), then run:
@@ -53,7 +53,7 @@ Browser opens automatically. Enter the password when prompted (ask the team lead
 ## Updating
 
 ```
-pip install --upgrade git+https://github.com/goelb/Tech-Pipeline.git
+pip install --upgrade git+https://github.com/bg20061220/Tech-Pipeline.git
 ```
 
 ---
